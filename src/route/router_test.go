@@ -74,6 +74,7 @@ func setupTestEnv(t *testing.T) *echo.Echo {
 		&mdb.AdminUser{},
 		&mdb.ApiKey{},
 		&mdb.Setting{},
+		&mdb.RateCache{},
 		&mdb.NotificationChannel{},
 		&mdb.Chain{},
 		&mdb.ChainToken{},
@@ -87,8 +88,16 @@ func setupTestEnv(t *testing.T) *echo.Echo {
 	config.SettingsGetString = func(key string) string {
 		return data.GetSettingString(key, "")
 	}
+	config.RateCacheLoad = data.LoadRateCacheSnapshot
+	config.RateCacheLoadAll = data.ListRateCacheSnapshots
+	config.RateCacheSave = data.SaveRateCacheSnapshot
+	config.ResetRateCacheRuntime()
 	t.Cleanup(func() {
 		config.SettingsGetString = nil
+		config.RateCacheLoad = nil
+		config.RateCacheLoadAll = nil
+		config.RateCacheSave = nil
+		config.ResetRateCacheRuntime()
 	})
 	if err := data.SetSetting("rate", "rate.forced_rate_list", `{"cny":{"usdt":0.14285714285714285}}`, "json"); err != nil {
 		t.Fatalf("seed rate.forced_rate_list: %v", err)
