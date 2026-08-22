@@ -48,6 +48,34 @@ func TestDefaultRpcNodesIncludesManualVerifyEpusdtEvmNodes(t *testing.T) {
 	}
 }
 
+func TestDefaultRpcNodesIncludesBscWebSocketNodes(t *testing.T) {
+	want := map[string]bool{
+		"wss://bsc.drpc.org":           false,
+		"wss://bsc-rpc.publicnode.com": false,
+		"wss://bsc.publicnode.com":     false,
+		"wss://rpc.ankr.com/bsc/ws":    false,
+	}
+
+	for _, node := range defaultRpcNodes() {
+		if node.Network != mdb.NetworkBsc || node.Type != mdb.RpcNodeTypeWs {
+			continue
+		}
+		if _, ok := want[node.Url]; !ok {
+			continue
+		}
+		if !node.Enabled || node.Weight != 1 || node.Purpose != mdb.RpcNodePurposeGeneral || node.Status != mdb.RpcNodeStatusUnknown {
+			t.Fatalf("invalid BSC WebSocket seed for %s: %+v", node.Url, node)
+		}
+		want[node.Url] = true
+	}
+
+	for url, found := range want {
+		if !found {
+			t.Fatalf("missing BSC WebSocket seed node %s", url)
+		}
+	}
+}
+
 func TestDefaultRpcNodesIncludesTonLiteGeneralNode(t *testing.T) {
 	var got *mdb.RpcNode
 	nodes := defaultRpcNodes()

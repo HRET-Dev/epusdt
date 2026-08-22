@@ -167,6 +167,35 @@ func TestCreateTransactionNormalizesEpayPaymentTypeCase(t *testing.T) {
 	}
 }
 
+func TestCreateTransactionAcceptsBscAndRejectsBinance(t *testing.T) {
+	cleanup := testutil.SetupTestDatabases(t)
+	defer cleanup()
+
+	if _, err := data.AddWalletAddressWithNetwork(mdb.NetworkBsc, "0xabc"); err != nil {
+		t.Fatalf("add BSC wallet: %v", err)
+	}
+
+	req := newCreateTransactionRequest("order_bsc_network", 1)
+	req.Network = "bsc"
+	resp, err := CreateTransaction(req, nil)
+	if err != nil {
+		t.Fatalf("create BSC transaction: %v", err)
+	}
+	order, err := data.GetOrderInfoByTradeId(resp.TradeId)
+	if err != nil {
+		t.Fatalf("reload BSC transaction: %v", err)
+	}
+	if order.Network != mdb.NetworkBsc {
+		t.Fatalf("stored BSC network = %q, want %q", order.Network, mdb.NetworkBsc)
+	}
+
+	legacyReq := newCreateTransactionRequest("order_binance_network", 1)
+	legacyReq.Network = "binance"
+	if _, err := CreateTransaction(legacyReq, nil); err != constant.ChainNotEnabled {
+		t.Fatalf("legacy binance network error = %v, want %v", err, constant.ChainNotEnabled)
+	}
+}
+
 func TestCreateTransactionAssignsIncrementedAmountsAndLocks(t *testing.T) {
 	cleanup := testutil.SetupTestDatabases(t)
 	defer cleanup()

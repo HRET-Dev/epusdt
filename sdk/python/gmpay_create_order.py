@@ -8,7 +8,7 @@ Example:
         --notify-url https://merchant.example.com/payment/notify \
         --redirect-url https://merchant.example.com/payment/return \
         --token usdt \
-        --network binance
+        --network bsc
 
 The secret key is read from GMPAY_SECRET_KEY or requested without terminal echo.
 Only Python's standard library is required.
