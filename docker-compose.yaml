@@ -1,6 +1,6 @@
 services:
   epusdt:
-    image: gmwallet/epusdt:latest
+    image: ghcr.io/hret-dev/epusdt:latest
     restart: always
     build:
       context: .
