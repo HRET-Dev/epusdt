@@ -352,6 +352,74 @@ func TestGetUsdtRateUsesAPIWhenAdminOverrideIsNotPositive(t *testing.T) {
 	}
 }
 
+func TestGetUsdtRateUsesBinanceC2CQuoteURLDirectly(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	t.Setenv("API_RATE_URL", "")
+
+	const binanceURL = "https://www.binance.com/bapi/c2c/v1/public/c2c/agent/quote-price?fiat=CNY&asset=USDT&tradeType=BUY"
+	installSettingsGetter(t, map[string]string{
+		"rate.forced_rate_list": `{"cny":{"usdt":0}}`,
+		"rate.api_url":          binanceURL,
+		"rate.mode":             RateModeAuto,
+	})
+
+	var calls int
+	installMockHTTPClient(t, func(r *http.Request) (*http.Response, error) {
+		calls++
+		if r.URL.Path != "/bapi/c2c/v1/public/c2c/agent/quote-price" {
+			t.Fatalf("Binance request path = %s", r.URL.Path)
+		}
+		if got := r.URL.Query().Get("fiat"); got != "CNY" {
+			t.Fatalf("Binance fiat query = %q, want CNY", got)
+		}
+		if got := r.URL.Query().Get("asset"); got != "USDT" {
+			t.Fatalf("Binance asset query = %q, want USDT", got)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"code":"000000","message":null,"data":{"asset":"USDT","fiat":"CNY","price":6.65},"success":true}`)),
+			Request:    r,
+		}, nil
+	})
+
+	got := GetUsdtRate()
+	if math.Abs(got-6.65) > 1e-9 {
+		t.Fatalf("GetUsdtRate() = %v, want 6.65", got)
+	}
+	if rate := GetRateForCoin("usdt", "cny"); math.Abs(rate-(1/6.65)) > 1e-9 {
+		t.Fatalf("GetRateForCoin(usdt, cny) = %v, want %v", rate, 1/6.65)
+	}
+	if calls != 1 {
+		t.Fatalf("Binance API calls = %d, want 1", calls)
+	}
+}
+
+func TestBinanceC2CQuoteRejectsMismatchedFiat(t *testing.T) {
+	installSettingsGetter(t, map[string]string{
+		"rate.api_url": binanceQuoteTestURL,
+		"rate.mode":    RateModeAuto,
+	})
+	installMockHTTPClient(t, func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"code":"000000","data":{"asset":"USDT","fiat":"USD","price":1},"success":true}`)),
+			Request:    r,
+		}, nil
+	})
+
+	result := RefreshRateBase("cny", true)
+	if result.OK || !strings.Contains(result.Error, "does not match requested base cny") {
+		t.Fatalf("mismatched Binance quote result = %#v", result)
+	}
+}
+
+const binanceQuoteTestURL = "https://www.binance.com/bapi/c2c/v1/public/c2c/agent/quote-price?fiat=CNY&asset=USDT&tradeType=BUY"
+
 func TestGetRateForCoinUsesAPIWhenForcedPairMissing(t *testing.T) {
 	viper.Reset()
 	t.Cleanup(viper.Reset)

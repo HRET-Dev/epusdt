@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"net/url"
 	"sort"
 	"strconv"
@@ -197,12 +198,25 @@ func fetchRatesForBase(base string) (map[string]float64, string, error) {
 		return nil, "", fmt.Errorf("rate api url is empty")
 	}
 	requestURL := strings.TrimRight(baseURL, "/") + "/" + url.PathEscape(base) + ".json"
+	if isBinanceC2CQuoteURL(baseURL) {
+		// The Binance quote endpoint is already a complete URL. Keep its
+		// query string instead of appending the normal /{base}.json suffix.
+		requestURL = baseURL
+	}
 	resp, err := http_client.GetHttpClient().R().Get(requestURL)
 	if err != nil {
 		return nil, baseURL, fmt.Errorf("call rate api: %w", err)
 	}
 	if resp.StatusCode() < 200 || resp.StatusCode() >= 300 {
 		return nil, baseURL, fmt.Errorf("call rate api unexpected status: %s", resp.Status())
+	}
+
+	if isBinanceC2CQuoteURL(baseURL) {
+		rates, err := parseBinanceC2CQuoteResponse(resp.Body(), base)
+		if err != nil {
+			return nil, baseURL, err
+		}
+		return rates, baseURL, nil
 	}
 
 	var payload map[string]json.RawMessage
@@ -241,6 +255,84 @@ func fetchRatesForBase(base string) (map[string]float64, string, error) {
 		return nil, baseURL, fmt.Errorf("rate api response has no positive %s rates", base)
 	}
 	return rates, baseURL, nil
+}
+
+// isBinanceC2CQuoteURL identifies Binance's complete quote endpoint. Unlike
+// the legacy rate API, this URL already contains the fiat, asset, and trade
+// type query parameters and must be requested as-is.
+func isBinanceC2CQuoteURL(rawURL string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return false
+	}
+	path := strings.TrimRight(strings.ToLower(parsed.Path), "/")
+	return strings.HasSuffix(path, "/bapi/c2c/v1/public/c2c/agent/quote-price")
+}
+
+type binanceC2CQuoteResponse struct {
+	Code    string `json:"code"`
+	Success bool   `json:"success"`
+	Data    struct {
+		Asset string          `json:"asset"`
+		Fiat  string          `json:"fiat"`
+		Price json.RawMessage `json:"price"`
+	} `json:"data"`
+}
+
+func parseBinanceC2CQuoteResponse(body []byte, base string) (map[string]float64, error) {
+	var payload binanceC2CQuoteResponse
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil, fmt.Errorf("decode Binance C2C quote response: %w", err)
+	}
+	if !payload.Success || payload.Code != "000000" {
+		return nil, fmt.Errorf("Binance C2C quote response is unsuccessful: code=%q", payload.Code)
+	}
+
+	fiat := normalizeRateKey(payload.Data.Fiat)
+	asset := normalizeRateKey(payload.Data.Asset)
+	if fiat == "" || asset == "" {
+		return nil, fmt.Errorf("Binance C2C quote response has empty fiat or asset")
+	}
+	if fiat != base {
+		return nil, fmt.Errorf("Binance C2C quote response fiat %s does not match requested base %s", fiat, base)
+	}
+
+	price, err := parsePositiveJSONNumber(payload.Data.Price)
+	if err != nil {
+		return nil, fmt.Errorf("decode Binance C2C quote price: %w", err)
+	}
+	// Binance returns the market quote as fiat per asset (for example,
+	// 1 USDT = 6.65 CNY). The rate engine stores asset per fiat, so invert it
+	// once here; GetUsdtRate continues to expose the fiat-per-USDT value used by
+	// order pricing.
+	rate := 1 / price
+	if math.IsNaN(rate) || math.IsInf(rate, 0) || rate <= 0 {
+		return nil, fmt.Errorf("Binance C2C quote price produces an invalid rate")
+	}
+	return map[string]float64{asset: rate}, nil
+}
+
+func parsePositiveJSONNumber(raw json.RawMessage) (float64, error) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return 0, fmt.Errorf("price is empty")
+	}
+
+	var number float64
+	if err := json.Unmarshal(raw, &number); err != nil {
+		var text string
+		if stringErr := json.Unmarshal(raw, &text); stringErr != nil {
+			return 0, fmt.Errorf("price is not a number: %w", err)
+		}
+		parsed, parseErr := strconv.ParseFloat(strings.TrimSpace(text), 64)
+		if parseErr != nil {
+			return 0, fmt.Errorf("price is not a number: %w", parseErr)
+		}
+		number = parsed
+	}
+	if math.IsNaN(number) || math.IsInf(number, 0) || number <= 0 {
+		return 0, fmt.Errorf("price must be positive")
+	}
+	return number, nil
 }
 
 func GetRateStatus() RateStatus {
